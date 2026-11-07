@@ -106,7 +106,7 @@ repo = os.environ.get("GITHUB_REPOSITORY", "jayantrathore068-hub/yt-shorts-bot")
 direct_video_url = f"https://raw.githubusercontent.com/{repo}/main/output.mp4"
 
 # 6. Send Video back to Make.com Webhook
-final_webhook = "YAHAN_APNA_MAKE_WEBHOOK_URL_DALEIN"
+final_webhook = "https://hook.us2.make.com/7ggp3l3jfk9uuofxxfuremegrft4jwb0"
 if final_webhook.startswith("http"):
     requests.post(final_webhook, json={
         "title": title,
