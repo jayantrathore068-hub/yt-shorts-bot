@@ -85,7 +85,7 @@ with open("output.mp4", "rb") as f:
 direct_video_url = upload_res["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
 
 # 6. Send Video back to Make.com Webhook
-requests.post(webhook_url, json={
+requests.post("https://hook.us2.make.com/7ggp3l3jfk9uuofxxfuremegrft4jwb0", json={
     "title": title,
     "script": script_text,
     "video_url": direct_video_url
