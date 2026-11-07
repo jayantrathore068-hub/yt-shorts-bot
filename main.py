@@ -1,92 +1,121 @@
-import os, json, asyncio, requests, urllib.parse, time
-from io import BytesIO
+import os
+import json
+import asyncio
+import requests
+import urllib.parse
 import edge_tts
-from PIL import Image, ImageDraw
 import numpy as np
+from PIL import Image
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 
-data = json.loads(os.environ["PAYLOAD"])
-webhook_url = data["webhook_url"]
-title = data.get("title", "Trending Kahani #shorts")
-script_text = data["script"]
-prompts = data["prompts"]
+# 1. Read Payload from Make.com
+payload_str = os.environ.get("PAYLOAD", "{}")
+try:
+    data = json.loads(payload_str)
+except Exception:
+    data = {}
 
-# 1. Hindi Voiceover
-async def make_audio():
-    communicate = edge_tts.Communicate(script_text, "hi-IN-MadhurNeural", rate="+8%")
+title = data.get("title", "Mystery Short #shorts")
+script_text = data.get("script", "क्या आप जानते हैं इस रहस्य के बारे में? यह सच में हैरान कर देने वाला है।")
+prompts = data.get("prompts", [
+    "dark mysterious cinematic scene",
+    "eerie surreal mystery background",
+    "confusing close up mystery shot",
+    "shocking revelation cinematic lighting"
+])
+webhook_url = data.get("webhook_url", "")
+
+# 2. Generate Hindi Voiceover (Edge-TTS)
+async def make_Audio():
+    communicate = edge_tts.Communicate(script_text, "hi-IN-MadhurNeural", rate="+10%")
     await communicate.save("voice.mp3")
-asyncio.run(make_audio())
 
-# Backup image generator (agar Pollinations busy ho toh crash nahi hone dega)
-def make_fallback_image(index):
-    img = Image.new("RGB", (720, 1280), (15, 18, 30))
-    draw = ImageDraw.Draw(img)
-    for y in range(1280):
-        r = int(15 + (y / 1280) * 35)
-        g = int(10 + (y / 1280) * 15)
-        b = int(30 + (y / 1280) * 55)
-        draw.line([(0, y), (720, y)], fill=(r, g, b))
-    return img
+asyncio.run(make_Audio())
 
-# 2. Download 4 Vertical Images Safely
+# 3. Download AI Images from Pollinations (with safe fallback)
 img_files = []
-headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-
-for i, p in enumerate(prompts):
-    fname = f"scene_{i}.jpg"
+for i, p in enumerate(prompts[:4]):
+    filename = f"img_{i}.jpg"
+    clean_p = urllib.parse.quote(f"{p}, vertical 9:16 aspect ratio, cinematic, dark mystery, hyperrealistic, 8k")
+    url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&nologo=true&seed={i+42}"
+    
     success = False
     for attempt in range(3):
         try:
-            encoded = urllib.parse.quote(f"{p}, dark cinematic lighting, vertical 9:16")
-            url = f"https://image.pollinations.ai/prompt/{encoded}?width=720&height=1280&nologo=true&seed={i+100+attempt}"
-            r = requests.get(url, headers=headers, timeout=45)
-            if r.status_code == 200 and len(r.content) > 5000:
-                img = Image.open(BytesIO(r.content)).convert("RGB").resize((720, 1280), Image.LANCZOS)
-                img.save(fname, "JPEG", quality=90)
+            r = requests.get(url, timeout=25)
+            if r.status_code == 200 and len(r.content) > 1000:
+                with open(filename, "wb") as f:
+                    f.write(r.content)
+                img = Image.open(filename).convert("RGB").resize((720, 1280))
+                img.save(filename)
                 success = True
                 break
-        except Exception as e:
-            print(f"Retry {attempt+1} for scene {i}: {e}")
-        time.sleep(3)
-
+        except Exception:
+            pass
+            
     if not success:
-        fallback = make_fallback_image(i)
-        fallback.save(fname, "JPEG", quality=90)
+        # Fallback solid dark image if download fails
+        img = Image.new("RGB", (720, 1280), color=(15, 15, 25))
+        img.save(filename)
+        
+    img_files.append(filename)
 
-    img_files.append(fname)
-
-# 3. Smooth Zoom Effect
+# Zoom effect function
 def apply_zoom(clip, zoom_ratio=0.15):
     def effect(get_frame, t):
         img = Image.fromarray(get_frame(t))
-        w, h = img.size
+        base_size = img.size
         scale = 1 + (zoom_ratio * (t / clip.duration))
-        new_w, new_h = int(w / scale), int(h / scale)
-        left, top = (w - new_w) // 2, (h - new_h) // 2
-        cropped = img.crop((left, top, left + new_w, top + new_h))
-        return np.array(cropped.resize((w, h), Image.LANCZOS))
+        new_size = [int(base_size[0] * scale), int(base_size[1] * scale)]
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+        x = (new_size[0] - base_size[0]) // 2
+        y = (new_size[1] - base_size[1]) // 2
+        img = img.crop((x, y, x + base_size[0], y + base_size[1]))
+        return np.array(img)
     return clip.fl(effect)
 
-# 4. Render Video (Direct PIL -> Numpy load so imageio never fails)
+# 4. Render Video (100% YouTube Compatible yuv420p format)
 audio = AudioFileClip("voice.mp3")
 clip_duration = audio.duration / len(img_files)
 clips = []
+
 for m in img_files:
     arr = np.array(Image.open(m).convert("RGB"))
-    clips.append(apply_zoom(ImageClip(arr).set_duration(clip_duration), 0.18))
+    clip = ImageClip(arr).set_duration(clip_duration)
+    clips.append(apply_zoom(clip, 0.15))
 
 final_video = concatenate_videoclips(clips, method="compose").set_audio(audio)
-final_video.write_videofile("output.mp4", fps=24, codec="libx264", audio_codec="aac", bitrate="900k", audio_bitrate="96k")
+final_video.write_videofile(
+    "output.mp4",
+    fps=24,
+    codec="libx264",
+    audio_codec="aac",
+    temp_audiofile="temp-audio.m4a",
+    remove_temp=True,
+    ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+)
 
-# 5. Get Direct Download Link
-with open("output.mp4", "rb") as f:
-    upload_res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}).json()
+# 5. Push video directly to GitHub Repo (100% Direct MP4 Link)
+os.system("git config user.name 'github-actions'")
+os.system("git config user.email 'actions@github.com'")
+os.system("git add output.mp4")
+os.system("git commit -m 'Update rendered short' || true")
+os.system("git push origin main --force")
 
-direct_video_url = upload_res["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
+repo = os.environ.get("GITHUB_REPOSITORY", "jayantrathore068-hub/yt-shorts-bot")
+direct_video_url = f"https://raw.githubusercontent.com/{repo}/main/output.mp4"
 
 # 6. Send Video back to Make.com Webhook
-requests.post("https://hook.us2.make.com/7ggp3l3jfk9uuofxxfuremegrft4jwb0", json={
-    "title": title,
-    "script": script_text,
-    "video_url": direct_video_url
-})
+final_webhook = "YAHAN_APNA_MAKE_WEBHOOK_URL_DALEIN"
+if final_webhook.startswith("http"):
+    requests.post(final_webhook, json={
+        "title": title,
+        "script": script_text,
+        "video_url": direct_video_url
+    })
+elif webhook_url.startswith("http"):
+    requests.post(webhook_url, json={
+        "title": title,
+        "script": script_text,
+        "video_url": direct_video_url
+    })
