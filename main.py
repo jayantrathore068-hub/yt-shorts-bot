@@ -8,29 +8,41 @@ import numpy as np
 from PIL import Image
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 
-# 1. Read Payload from Make.com
+# 1. Read Payload from Make.com (Safe Fallback if Empty)
 payload_str = os.environ.get("PAYLOAD", "{}")
 try:
     data = json.loads(payload_str)
 except Exception:
     data = {}
 
-title = data.get("title", "Mystery Short #shorts")
-script_text = data.get("script", "क्या आप जानते हैं इस रहस्य के बारे में? यह सच में हैरान कर देने वाला है।")
-prompts = data.get("prompts", [
+title = (data.get("title") or "").strip() or "Mystery Fact #shorts"
+script_text = (data.get("script") or "").strip()
+if len(script_text) < 5:
+    script_text = "क्या आप जानते हैं इस रहस्य के बारे में? यह सच में हैरान कर देने वाला है।"
+
+prompts = data.get("prompts") or [
     "dark mysterious cinematic scene",
     "eerie surreal mystery background",
     "confusing close up mystery shot",
     "shocking revelation cinematic lighting"
-])
+]
 webhook_url = data.get("webhook_url", "")
 
-# 2. Generate Hindi Voiceover (Edge-TTS)
+# 2. Generate Hindi Voiceover (Edge-TTS + Google TTS Fallback)
 async def make_Audio():
     communicate = edge_tts.Communicate(script_text, "hi-IN-MadhurNeural", rate="+10%")
     await communicate.save("voice.mp3")
 
-asyncio.run(make_Audio())
+try:
+    asyncio.run(make_Audio())
+except Exception as e:
+    print("Edge-TTS failed, switching to backup:", e)
+
+# Check if voice.mp3 is empty or corrupted, use Google TTS as backup
+if not os.path.exists("voice.mp3") or os.path.getsize("voice.mp3") < 1000:
+    from gtts import gTTS
+    tts = gTTS(text=script_text, lang="hi", slow=False)
+    tts.save("voice.mp3")
 
 # 3. Download AI Images from Pollinations (with safe fallback)
 img_files = []
