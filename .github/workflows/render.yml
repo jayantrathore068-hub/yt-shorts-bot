@@ -22,7 +22,8 @@ jobs:
       - name: Install FFmpeg and Python Libraries
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install edge-tts moviepy==1.0.3 requests Pillow==9.5.0 numpy
+                    pip install edge-tts gTTS moviepy==1.0.3 requests Pillow==9.5.0 numpy
+
 
       - name: Generate Video and Send to Make.com
         env:
